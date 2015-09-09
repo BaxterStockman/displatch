@@ -1,107 +1,34 @@
-#!/usr/bin/env perl
-
 use strict;
 use warnings;
 
+package Displatch;
+
 use Carp ();
-use Data::Dumper ();
 use Getopt::Long qw(GetOptionsFromArray :config require_order);
-use Scalar::Util ();
 
-use subs qw(main _pipe _fork _open _close _debug);
+use subs qw(_pipe _fork _open _close _debug);
 
-use constant {
-    BUFSIZE => 2048,
-};
+use Exporter ();
+our @EXPORT_OK = qw(
+    run_pipeline
+    run_fanout
+);
+our %EXPORT_TAGS = (
+    all => \@EXPORT_OK,
+);
 
-$SIG{PIPE} = sub {
-    unshift @_, "Error in pipe()";
-    goto &Carp::confess;
-};
+{
+    our $Debug = 0;
+}
 
-sub main {
-    my ( @args ) = @_;
+sub import {
+    my ( $class, @imports ) = @_;
 
-    #my @commands;
-    my $operation;
-    my %options = (
-        tee         => undef,
-        pipeline    => sub {
-            $operation = \&run_pipeline;
-        },
-        fanout      => sub {
-            $operation = \&run_fanout;
-        },
-        debug      => sub {
-            my $debug = sub (@) {
-                print STDERR "# DEBUG => @_\n" if -t STDERR;
-            };
+    my @passthrough_imports = grep { $_ ne ':debug' } @imports;
 
-            {
-                no strict 'refs';
-                no warnings 'redefine';
-                *_debug = $debug;
-            }
-        },
-    );
+    our $Debug = 1 if @passthrough_imports = @imports;
 
-    GetOptionsFromArray(
-        \@args,
-        \%options,
-        'tee',
-        'fanout',
-        'pipeline',
-        'debug',
-    ) or die "Error in options\n";
-
-    my $separator = '--';
-    my $separator_index = 0;
-    foreach my $arg ( @args ) {
-        last if $arg eq $separator;
-        $separator_index++;
-    }
-
-    # Commands are everything until just before '--'
-    my @commands = splice @args, 0, $separator_index;
-    # And inputs are everything afterward.  Default to opening STDIN if there
-    # are no other inputs.
-    my @inputs = $#args ? map { ['<', $_] } @args[1..$#args] : ();
-    unless ( @inputs ) {
-        if ( -t STDIN ) {
-            die "No input provided";
-        }
-        push @inputs, ['<&', \*STDIN];
-    }
-
-    my @writers = ($operation // \&run_pipeline)->( @commands, \%options );
-
-    my $buf;
-    if ( scalar @writers > 1 ) {
-        foreach my $input ( @inputs ) {
-            _open my $fh, $input->[0], $input->[1];
-
-            while (sysread($fh, $buf, BUFSIZE)) {
-                syswrite($_, $buf) foreach @writers;
-            }
-
-            _close $fh;
-        }
-    }
-    else {
-        my $writer = $writers[0];
-        foreach my $input ( @inputs ) {
-            # Two-argument form so that '<-' works.
-            _open my $fh, $input->[0], $input->[1];
-
-            while (sysread($fh, $buf, BUFSIZE)) {
-                syswrite($writer, $buf);
-            }
-
-            _close $fh;
-        }
-    }
-
-    return 1;
+    return Exporter::import( $class, @passthrough_imports );
 }
 
 sub run_pipeline {
@@ -232,8 +159,7 @@ sub _close ($) {
 }
 
 sub _debug (@) {
-    1;
+    print STDERR "# DEBUG => @_\n" if (-t STDERR and our $Debug);
 }
 
-# Begin main routine
-exit ! main( @ARGV ) unless caller;
+1;
